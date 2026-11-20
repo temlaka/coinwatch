@@ -1,0 +1,511 @@
+openapi: 3.0.3
+info:
+  title: coinwatch API
+  version: 1.0.0
+  description: |
+    REST API for tracking cryptocurrency prices.
+
+    Prices come from CoinGecko. Every tracked coin keeps the last 100 price points,
+    and a background scheduler refreshes all prices on a configurable interval.
+
+    Get a token via `POST /auth/register` or `POST /auth/login`, press **Authorize**
+    and paste it to call the protected endpoints.
+servers:
+  - url: /
+tags:
+  - name: auth
+    description: Registration and login
+  - name: crypto
+    description: Tracked cryptocurrencies, price history and stats
+  - name: schedule
+    description: Background price updates
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register a new user
+      security: []
+      requestBody:
+        $ref: "#/components/requestBodies/Credentials"
+      responses:
+        "201":
+          $ref: "#/components/responses/Token"
+        "400":
+          description: Invalid JSON, empty username/password or password longer than 72 bytes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: invalid username or password format
+        "409":
+          description: Username is taken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: user already exists
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Log in and get a JWT
+      security: []
+      requestBody:
+        $ref: "#/components/requestBodies/Credentials"
+      responses:
+        "200":
+          $ref: "#/components/responses/Token"
+        "400":
+          $ref: "#/components/responses/InvalidJSON"
+        "401":
+          description: Wrong username or password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: invalid credentials
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crypto:
+    get:
+      tags: [crypto]
+      summary: List tracked cryptocurrencies
+      responses:
+        "200":
+          description: All tracked coins, sorted by symbol
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cryptos]
+                properties:
+                  cryptos:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Crypto"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      tags: [crypto]
+      summary: Start tracking a cryptocurrency
+      description: Looks up the ticker on CoinGecko, saves the coin and its first price point.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [symbol]
+              properties:
+                symbol:
+                  type: string
+                  description: Ticker, case-insensitive
+                  example: BTC
+      responses:
+        "201":
+          $ref: "#/components/responses/WrappedCrypto"
+        "400":
+          description: Invalid JSON or ticker unknown to CoinGecko
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: unknown symbol
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          description: Coin is already tracked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: crypto already tracked
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crypto/{symbol}:
+    parameters:
+      - $ref: "#/components/parameters/Symbol"
+    get:
+      tags: [crypto]
+      summary: Get a tracked cryptocurrency
+      responses:
+        "200":
+          description: The coin
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Crypto"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CryptoNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      tags: [crypto]
+      summary: Stop tracking a cryptocurrency
+      description: Deletes the coin together with its price history.
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+              example: {}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CryptoNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crypto/{symbol}/refresh:
+    parameters:
+      - $ref: "#/components/parameters/Symbol"
+    put:
+      tags: [crypto]
+      summary: Refresh the price now
+      description: Fetches the current price from CoinGecko and appends it to the history.
+      responses:
+        "200":
+          $ref: "#/components/responses/WrappedCrypto"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CryptoNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crypto/{symbol}/history:
+    parameters:
+      - $ref: "#/components/parameters/Symbol"
+    get:
+      tags: [crypto]
+      summary: Get price history
+      description: Up to the last 100 price points, oldest first.
+      responses:
+        "200":
+          description: Price history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [symbol, history]
+                properties:
+                  symbol:
+                    type: string
+                    example: BTC
+                  history:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/PricePoint"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CryptoNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /crypto/{symbol}/stats:
+    parameters:
+      - $ref: "#/components/parameters/Symbol"
+    get:
+      tags: [crypto]
+      summary: Get price statistics
+      description: Calculated over the stored price history.
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [symbol, current_price, stats]
+                properties:
+                  symbol:
+                    type: string
+                    example: BTC
+                  current_price:
+                    type: number
+                    format: double
+                    example: 45000.5
+                  stats:
+                    $ref: "#/components/schemas/Stats"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/CryptoNotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /schedule:
+    get:
+      tags: [schedule]
+      summary: Get auto-update settings
+      responses:
+        "200":
+          description: Current settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Schedule"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      tags: [schedule]
+      summary: Change auto-update settings
+      description: The next update is rescheduled to now + interval_seconds.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleSettings"
+      responses:
+        "200":
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleSettings"
+        "400":
+          description: Invalid JSON or interval out of range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: interval_seconds must be between 10 and 3600
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /schedule/trigger:
+    post:
+      tags: [schedule]
+      summary: Update all prices now
+      description: |
+        Refreshes every tracked coin. Coins that fail are skipped;
+        the request fails only if all of them fail.
+      responses:
+        "200":
+          description: Update finished
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [updated_count, timestamp]
+                properties:
+                  updated_count:
+                    type: integer
+                    example: 5
+                  timestamp:
+                    type: string
+                    format: date-time
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    Symbol:
+      name: symbol
+      in: path
+      required: true
+      description: Ticker, case-insensitive
+      schema:
+        type: string
+        example: BTC
+
+  requestBodies:
+    Credentials:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [username, password]
+            properties:
+              username:
+                type: string
+                example: alice
+              password:
+                type: string
+                format: password
+                maxLength: 72
+                example: secret
+
+  responses:
+    Token:
+      description: JWT for the Authorization header
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [token]
+            properties:
+              token:
+                type: string
+                example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+    WrappedCrypto:
+      description: The coin
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [crypto]
+            properties:
+              crypto:
+                $ref: "#/components/schemas/Crypto"
+    InvalidJSON:
+      description: Request body is not valid JSON
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: invalid JSON
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: wrong token
+    CryptoNotFound:
+      description: Coin is not tracked
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: crypto not found
+    InternalError:
+      description: Unexpected server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: internal error
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Crypto:
+      type: object
+      required: [symbol, name, current_price, last_updated]
+      properties:
+        symbol:
+          type: string
+          example: BTC
+        name:
+          type: string
+          example: Bitcoin
+        current_price:
+          type: number
+          format: double
+          example: 45000.5
+        last_updated:
+          type: string
+          format: date-time
+
+    PricePoint:
+      type: object
+      required: [price, timestamp]
+      properties:
+        price:
+          type: number
+          format: double
+          example: 45000.5
+        timestamp:
+          type: string
+          format: date-time
+
+    Stats:
+      type: object
+      required: [min_price, max_price, avg_price, price_change, price_change_percent, records_count]
+      properties:
+        min_price:
+          type: number
+          format: double
+          example: 44000
+        max_price:
+          type: number
+          format: double
+          example: 46000
+        avg_price:
+          type: number
+          format: double
+          example: 45000
+        price_change:
+          type: number
+          format: double
+          description: Last price minus first price in the history
+          example: 1000
+        price_change_percent:
+          type: number
+          format: double
+          description: Change relative to the first price; 0 if the first price is 0
+          example: 2.27
+        records_count:
+          type: integer
+          example: 100
+
+    ScheduleSettings:
+      type: object
+      required: [enabled, interval_seconds]
+      properties:
+        enabled:
+          type: boolean
+          example: true
+        interval_seconds:
+          type: integer
+          minimum: 10
+          maximum: 3600
+          example: 60
+
+    Schedule:
+      allOf:
+        - $ref: "#/components/schemas/ScheduleSettings"
+        - type: object
+          required: [last_update, next_update]
+          properties:
+            last_update:
+              type: string
+              format: date-time
+            next_update:
+              type: string
+              format: date-time
