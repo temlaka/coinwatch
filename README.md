@@ -108,10 +108,3 @@ docs/                    спецификация OpenAPI
 go test -race ./...
 golangci-lint run ./...
 ```
-
-## Планы
-
-- Интеграционные тесты PostgreSQL-репозиториев (testcontainers)
-- `context.Context` через все слои
-- Машиночитаемые коды ошибок в ответах API
-- Ограничение частоты запросов к CoinGecko
